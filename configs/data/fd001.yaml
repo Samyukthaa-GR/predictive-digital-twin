@@ -1,0 +1,53 @@
+dataset:
+  name: FD001
+  raw_dir: data/raw/C-MAPSS
+  train_file: train_FD001.txt
+  test_file: test_FD001.txt
+  rul_file: RUL_FD001.txt
+
+columns:
+  id: unit_id
+  cycle: cycle
+  operational_settings:
+    - setting_1
+    - setting_2
+    - setting_3
+  sensors:
+    - sensor_1
+    - sensor_2
+    - sensor_3
+    - sensor_4
+    - sensor_5
+    - sensor_6
+    - sensor_7
+    - sensor_8
+    - sensor_9
+    - sensor_10
+    - sensor_11
+    - sensor_12
+    - sensor_13
+    - sensor_14
+    - sensor_15
+    - sensor_16
+    - sensor_17
+    - sensor_18
+    - sensor_19
+    - sensor_20
+    - sensor_21
+
+labels:
+  raw_target: rul_raw
+  capped_target: rul_capped
+  cap: 125
+
+split:
+  validation_size: 0.2
+  random_seed: 42
+  manifest_path: data/processed/fd001_split_manifest.json
+
+outputs:
+  processed_dir: data/processed/FD001
+  train_labeled: train_labeled.csv
+  validation_labeled: validation_labeled.csv
+  test_features: test_features.csv
+  test_labels: test_labels.csv

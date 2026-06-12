@@ -7,7 +7,7 @@ venv/
 .env/
 
 # Data (important for ML projects)
-data/
+/data/
 *.csv
 *.zip
 
