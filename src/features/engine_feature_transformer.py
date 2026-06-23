@@ -15,17 +15,25 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class RollingWindowState:
-    """Incremental causal rolling state for one sensor and one window size."""
+    """Incremental causal rolling and slope state for one sensor/window size."""
 
     window_size: int
+    times: deque[float] = field(default_factory=deque)
     values: deque[float] = field(default_factory=deque)
     min_values: deque[float] = field(default_factory=deque)
     max_values: deque[float] = field(default_factory=deque)
+    running_sum_time: float = 0.0
+    running_sum_time_squares: float = 0.0
+    running_sum_time_value: float = 0.0
     running_sum: float = 0.0
     running_sum_squares: float = 0.0
 
-    def update(self, value: float) -> dict[str, float]:
+    def update(self, time: float, value: float) -> dict[str, float]:
+        self.times.append(time)
         self.values.append(value)
+        self.running_sum_time += time
+        self.running_sum_time_squares += time * time
+        self.running_sum_time_value += time * value
         self.running_sum += value
         self.running_sum_squares += value * value
 
@@ -38,7 +46,11 @@ class RollingWindowState:
         self.max_values.append(value)
 
         if len(self.values) > self.window_size:
+            expired_time = self.times.popleft()
             expired = self.values.popleft()
+            self.running_sum_time -= expired_time
+            self.running_sum_time_squares -= expired_time * expired_time
+            self.running_sum_time_value -= expired_time * expired
             self.running_sum -= expired
             self.running_sum_squares -= expired * expired
             if self.min_values and self.min_values[0] == expired:
@@ -49,11 +61,22 @@ class RollingWindowState:
         count = len(self.values)
         mean = self.running_sum / count
         variance = max((self.running_sum_squares / count) - (mean * mean), 0.0)
+        denominator = (count * self.running_sum_time_squares) - (
+            self.running_sum_time * self.running_sum_time
+        )
+        # A single available point has no identifiable trend; use a neutral
+        # causal fallback until at least two observations are available.
+        slope = 0.0
+        if count >= 2 and denominator != 0:
+            slope = (
+                (count * self.running_sum_time_value) - (self.running_sum_time * self.running_sum)
+            ) / denominator
         return {
             "mean": mean,
             "std": math.sqrt(variance),
             "min": self.min_values[0],
             "max": self.max_values[0],
+            "slope": slope,
         }
 
 
@@ -62,8 +85,9 @@ class EngineFeatureTransformer:
 
     The transformer processes one engine sequence at a time in cycle order. The
     current implementation passes raw sensor values through unchanged and adds
-    first-order sensor deltas plus causal rolling statistics. Trend,
-    normalization, and modeling logic are intentionally out of scope.
+    first-order sensor deltas, causal rolling statistics, and causal rolling
+    trend slopes. Normalization and modeling logic are intentionally out of
+    scope.
     """
 
     def __init__(
@@ -145,6 +169,7 @@ class EngineFeatureTransformer:
             self._add_rolling_features(
                 transformed,
                 sensor_column,
+                float(row[self.cycle_column]),
                 float(current_sensor_values[sensor_column]),
             )
 
@@ -227,6 +252,8 @@ class EngineFeatureTransformer:
             for rolling_state in sensor_state.values():
                 if len(rolling_state.values) > rolling_state.window_size:
                     raise RuntimeError("Rolling buffer exceeded configured window size")
+                if len(rolling_state.times) != len(rolling_state.values):
+                    raise RuntimeError("Rolling time/value buffer length mismatch")
 
     def _resolve_sensor_columns(self, available_columns) -> tuple[str, ...]:
         if self.sensor_columns is not None:
@@ -248,6 +275,7 @@ class EngineFeatureTransformer:
         self,
         transformed: pd.Series,
         sensor_column: str,
+        cycle: float,
         sensor_value: float,
     ) -> None:
         rolling_by_sensor = self.state["rolling"].setdefault(sensor_column, {})
@@ -256,9 +284,11 @@ class EngineFeatureTransformer:
                 window_size,
                 RollingWindowState(window_size=window_size),
             )
-            stats = rolling_state.update(sensor_value)
+            stats = rolling_state.update(cycle, sensor_value)
             if self.debug_assertions and len(rolling_state.values) > window_size:
                 raise RuntimeError("Rolling buffer exceeded configured window size")
+            if self.debug_assertions and len(rolling_state.times) != len(rolling_state.values):
+                raise RuntimeError("Rolling time/value buffer length mismatch")
 
             transformed[self._rolling_column_name(sensor_column, window_size, "mean")] = stats[
                 "mean"
@@ -272,7 +302,12 @@ class EngineFeatureTransformer:
             transformed[self._rolling_column_name(sensor_column, window_size, "max")] = stats[
                 "max"
             ]
+            transformed[self._slope_column_name(sensor_column, window_size)] = stats["slope"]
 
     @staticmethod
     def _rolling_column_name(sensor_column: str, window_size: int, statistic: str) -> str:
         return f"{sensor_column}_rolling_{statistic}_{window_size}"
+
+    @staticmethod
+    def _slope_column_name(sensor_column: str, window_size: int) -> str:
+        return f"{sensor_column}_slope_{window_size}"

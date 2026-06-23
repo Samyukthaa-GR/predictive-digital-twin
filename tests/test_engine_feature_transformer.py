@@ -41,11 +41,13 @@ class EngineFeatureTransformerTests(unittest.TestCase):
                 "sensor_1_rolling_std_5": [0.0, 0.5],
                 "sensor_1_rolling_min_5": [10.0, 10.0],
                 "sensor_1_rolling_max_5": [10.0, 11.0],
+                "sensor_1_slope_5": [0.0, 1.0],
                 "delta_sensor_2": [0.0, -2.5],
                 "sensor_2_rolling_mean_5": [50.0, 48.75],
                 "sensor_2_rolling_std_5": [0.0, 1.25],
                 "sensor_2_rolling_min_5": [50.0, 47.5],
                 "sensor_2_rolling_max_5": [50.0, 50.0],
+                "sensor_2_slope_5": [0.0, -2.5],
             }
         )
         assert_frame_equal(transformed, expected)
@@ -93,6 +95,8 @@ class EngineFeatureTransformerTests(unittest.TestCase):
         self.assertEqual(second_engine["delta_sensor_1"].tolist(), [0.0, 5.0])
         self.assertEqual(first_engine["sensor_1_rolling_mean_5"].tolist(), [10.0, 11.0])
         self.assertEqual(second_engine["sensor_1_rolling_mean_5"].tolist(), [30.0, 32.5])
+        self.assertEqual(first_engine["sensor_1_slope_5"].tolist(), [0.0, 2.0])
+        self.assertEqual(second_engine["sensor_1_slope_5"].tolist(), [0.0, 5.0])
 
     def test_rolling_features_are_causal_and_use_fixed_size_buffer(self) -> None:
         frame = pd.DataFrame(
@@ -114,9 +118,29 @@ class EngineFeatureTransformerTests(unittest.TestCase):
         self.assertEqual(transformed["sensor_1_rolling_std_2"].tolist(), [0.0, 0.5, 1.0])
         self.assertEqual(transformed["sensor_1_rolling_min_2"].tolist(), [1.0, 1.0, 2.0])
         self.assertEqual(transformed["sensor_1_rolling_max_2"].tolist(), [1.0, 2.0, 4.0])
+        self.assertEqual(transformed["sensor_1_slope_2"].tolist(), [0.0, 1.0, 2.0])
         rolling_state = transformer.state["rolling"]["sensor_1"][2]
         self.assertEqual(list(rolling_state.values), [2.0, 4.0])
+        self.assertEqual(list(rolling_state.times), [2.0, 3.0])
         self.assertLessEqual(len(rolling_state.values), 2)
+
+    def test_slope_features_use_cycle_time_with_available_causal_history(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "unit_id": [1, 1, 1],
+                "cycle": [10, 12, 15],
+                "sensor_1": [5.0, 9.0, 15.0],
+            }
+        )
+        sequence = EngineSequence(engine_id=1, rows=frame)
+        transformer = EngineFeatureTransformer(
+            sensor_columns=["sensor_1"],
+            rolling_window_sizes=[5],
+        )
+
+        transformed = transformer.transform(sequence)
+
+        self.assertEqual(transformed["sensor_1_slope_5"].tolist(), [0.0, 2.0, 2.0])
 
     def test_update_requires_reset_before_processing(self) -> None:
         transformer = EngineFeatureTransformer()
